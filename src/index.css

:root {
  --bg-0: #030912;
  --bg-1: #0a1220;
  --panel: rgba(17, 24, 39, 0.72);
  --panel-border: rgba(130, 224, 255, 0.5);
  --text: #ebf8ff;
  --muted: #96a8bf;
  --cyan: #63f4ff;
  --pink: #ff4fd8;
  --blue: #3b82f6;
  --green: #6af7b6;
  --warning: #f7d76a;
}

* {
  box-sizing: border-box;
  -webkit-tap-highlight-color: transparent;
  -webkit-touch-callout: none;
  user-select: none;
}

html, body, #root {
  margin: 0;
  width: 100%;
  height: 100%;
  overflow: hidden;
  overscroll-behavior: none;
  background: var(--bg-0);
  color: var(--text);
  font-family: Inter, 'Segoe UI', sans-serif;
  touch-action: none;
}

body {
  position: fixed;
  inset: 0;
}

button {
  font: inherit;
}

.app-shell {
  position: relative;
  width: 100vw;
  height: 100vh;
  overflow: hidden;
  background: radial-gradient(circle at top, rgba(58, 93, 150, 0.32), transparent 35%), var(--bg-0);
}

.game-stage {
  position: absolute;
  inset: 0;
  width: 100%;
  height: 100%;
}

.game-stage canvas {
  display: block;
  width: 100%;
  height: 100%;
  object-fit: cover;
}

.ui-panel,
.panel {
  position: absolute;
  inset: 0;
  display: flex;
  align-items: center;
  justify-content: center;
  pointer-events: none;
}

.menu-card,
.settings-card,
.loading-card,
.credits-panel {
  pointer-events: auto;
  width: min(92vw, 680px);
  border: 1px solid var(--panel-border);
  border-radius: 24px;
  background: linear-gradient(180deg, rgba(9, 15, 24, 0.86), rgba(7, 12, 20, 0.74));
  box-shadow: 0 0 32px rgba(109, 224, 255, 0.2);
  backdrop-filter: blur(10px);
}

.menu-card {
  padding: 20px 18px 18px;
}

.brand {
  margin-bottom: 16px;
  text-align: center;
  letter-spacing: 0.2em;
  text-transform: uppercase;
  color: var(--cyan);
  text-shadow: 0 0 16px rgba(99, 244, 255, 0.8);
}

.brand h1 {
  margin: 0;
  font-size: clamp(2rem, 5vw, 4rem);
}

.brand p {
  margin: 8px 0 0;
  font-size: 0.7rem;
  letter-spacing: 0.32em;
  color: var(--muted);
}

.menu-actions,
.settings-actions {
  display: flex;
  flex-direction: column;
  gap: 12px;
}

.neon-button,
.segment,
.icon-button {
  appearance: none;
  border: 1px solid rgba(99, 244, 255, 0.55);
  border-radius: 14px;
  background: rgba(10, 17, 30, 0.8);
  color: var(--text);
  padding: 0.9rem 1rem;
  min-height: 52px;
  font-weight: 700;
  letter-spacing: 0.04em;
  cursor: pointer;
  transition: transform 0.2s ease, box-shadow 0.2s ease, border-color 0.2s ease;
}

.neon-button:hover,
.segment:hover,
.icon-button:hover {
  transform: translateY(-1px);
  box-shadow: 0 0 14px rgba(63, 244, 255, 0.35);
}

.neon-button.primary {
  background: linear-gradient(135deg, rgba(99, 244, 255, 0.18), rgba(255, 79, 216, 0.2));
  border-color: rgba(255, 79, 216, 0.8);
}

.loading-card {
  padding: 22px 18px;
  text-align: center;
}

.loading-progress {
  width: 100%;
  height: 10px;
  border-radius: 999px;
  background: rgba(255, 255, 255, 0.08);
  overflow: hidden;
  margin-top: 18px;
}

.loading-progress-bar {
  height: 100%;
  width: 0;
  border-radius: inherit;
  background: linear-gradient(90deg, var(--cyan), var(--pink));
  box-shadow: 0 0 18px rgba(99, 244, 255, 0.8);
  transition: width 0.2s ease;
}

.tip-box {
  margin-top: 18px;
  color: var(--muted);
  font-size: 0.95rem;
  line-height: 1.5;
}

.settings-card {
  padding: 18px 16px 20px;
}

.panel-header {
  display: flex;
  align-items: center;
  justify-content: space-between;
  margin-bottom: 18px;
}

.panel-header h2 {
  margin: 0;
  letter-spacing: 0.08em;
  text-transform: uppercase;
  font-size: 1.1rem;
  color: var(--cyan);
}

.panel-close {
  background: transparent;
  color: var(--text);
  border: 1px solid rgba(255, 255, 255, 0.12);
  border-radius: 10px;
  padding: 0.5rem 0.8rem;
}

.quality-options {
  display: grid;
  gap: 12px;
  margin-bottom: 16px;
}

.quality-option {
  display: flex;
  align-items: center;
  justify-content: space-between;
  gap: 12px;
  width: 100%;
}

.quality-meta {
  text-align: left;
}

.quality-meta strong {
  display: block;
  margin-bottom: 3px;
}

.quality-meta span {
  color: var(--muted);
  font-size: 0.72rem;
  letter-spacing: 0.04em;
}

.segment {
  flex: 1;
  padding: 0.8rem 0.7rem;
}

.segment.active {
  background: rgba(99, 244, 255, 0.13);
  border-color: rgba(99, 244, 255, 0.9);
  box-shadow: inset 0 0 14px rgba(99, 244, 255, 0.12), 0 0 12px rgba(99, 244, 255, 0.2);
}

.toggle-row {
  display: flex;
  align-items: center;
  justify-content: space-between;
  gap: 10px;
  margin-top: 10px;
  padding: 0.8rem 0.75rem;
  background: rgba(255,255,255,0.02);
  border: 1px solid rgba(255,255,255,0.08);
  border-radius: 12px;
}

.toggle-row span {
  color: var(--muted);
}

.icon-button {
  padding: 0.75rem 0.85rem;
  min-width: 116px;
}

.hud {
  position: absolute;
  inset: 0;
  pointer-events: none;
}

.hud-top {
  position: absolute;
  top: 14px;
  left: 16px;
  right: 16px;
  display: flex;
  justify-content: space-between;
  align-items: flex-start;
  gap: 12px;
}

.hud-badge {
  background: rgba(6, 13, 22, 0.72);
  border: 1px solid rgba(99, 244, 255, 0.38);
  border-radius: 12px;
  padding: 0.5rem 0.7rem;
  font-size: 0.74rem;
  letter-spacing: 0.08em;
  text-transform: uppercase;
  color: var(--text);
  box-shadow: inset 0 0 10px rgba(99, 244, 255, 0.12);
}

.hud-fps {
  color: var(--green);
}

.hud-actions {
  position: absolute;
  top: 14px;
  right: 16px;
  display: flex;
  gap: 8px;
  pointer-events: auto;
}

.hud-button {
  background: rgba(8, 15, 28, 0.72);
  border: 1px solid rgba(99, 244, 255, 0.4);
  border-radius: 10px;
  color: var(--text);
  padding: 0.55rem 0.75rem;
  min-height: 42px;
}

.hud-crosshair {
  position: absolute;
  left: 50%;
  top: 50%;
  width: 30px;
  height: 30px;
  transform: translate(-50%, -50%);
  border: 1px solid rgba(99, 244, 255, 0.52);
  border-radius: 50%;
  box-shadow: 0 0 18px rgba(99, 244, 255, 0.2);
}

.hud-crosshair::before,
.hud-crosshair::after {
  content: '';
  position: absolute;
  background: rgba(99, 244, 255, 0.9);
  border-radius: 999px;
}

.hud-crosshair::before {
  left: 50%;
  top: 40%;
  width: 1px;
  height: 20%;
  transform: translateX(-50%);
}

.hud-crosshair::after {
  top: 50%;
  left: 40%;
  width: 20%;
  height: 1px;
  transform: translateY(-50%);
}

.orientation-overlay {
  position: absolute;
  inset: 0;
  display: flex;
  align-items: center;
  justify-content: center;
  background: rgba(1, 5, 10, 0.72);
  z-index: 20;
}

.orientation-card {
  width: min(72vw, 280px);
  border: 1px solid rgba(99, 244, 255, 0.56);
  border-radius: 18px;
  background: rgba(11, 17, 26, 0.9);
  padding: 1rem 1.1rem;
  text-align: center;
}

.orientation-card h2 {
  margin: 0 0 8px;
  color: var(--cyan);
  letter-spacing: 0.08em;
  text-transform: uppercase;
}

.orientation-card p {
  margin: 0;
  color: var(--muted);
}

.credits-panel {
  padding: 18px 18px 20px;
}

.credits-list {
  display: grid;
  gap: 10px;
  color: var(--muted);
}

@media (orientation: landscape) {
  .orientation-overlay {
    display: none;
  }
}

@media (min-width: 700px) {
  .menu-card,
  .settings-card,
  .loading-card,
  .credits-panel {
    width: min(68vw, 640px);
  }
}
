@@ -1,0 +1,410 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import * as THREE from 'three';
+import { DEFAULT_SETTINGS, FIXED_TIMESTEP, GRAPHICS_PRESETS, QUALITY_ORDER, TIP_SET } from './core/constants';
+import { detectPhoneTier, getLowerQuality } from './core/quality';
+import { getOrientationState, setupInputGuards } from './core/input';
+import { createAudioEngine } from './audio/AudioEngine';
+import { createTestScene } from './world/TestScene';
+import { MenuScreen } from './ui/MenuScreen';
+import { LoadingScreen } from './ui/LoadingScreen';
+import { SettingsScreen } from './ui/SettingsScreen';
+import { HUD } from './ui/HUD';
+
+function App() {
+  const mountRef = useRef(null);
+  const rendererRef = useRef(null);
+  const sceneRef = useRef(null);
+  const cameraRef = useRef(null);
+  const animationRef = useRef(0);
+  const accumulatorRef = useRef(0);
+  const lastFrameRef = useRef(0);
+  const lowFpsTimerRef = useRef(0);
+  const audioRef = useRef(null);
+  const settingsRef = useRef(DEFAULT_SETTINGS);
+
+  const [screen, setScreen] = useState('menu');
+  const [settings, setSettings] = useState(() => ({
+    ...DEFAULT_SETTINGS,
+    quality: detectPhoneTier(),
+  }));
+  const [fps, setFps] = useState(0);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [tip, setTip] = useState(TIP_SET[0]);
+  const [portrait, setPortrait] = useState(getOrientationState());
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  useEffect(() => {
+    if (!audioRef.current) {
+      audioRef.current = createAudioEngine();
+    }
+  }, []);
+
+  useEffect(() => {
+    const cleanup = setupInputGuards();
+    const onResize = () => {
+      setPortrait(getOrientationState());
+      if (rendererRef.current && cameraRef.current) {
+        const { innerWidth, innerHeight } = window;
+        rendererRef.current.setSize(innerWidth, innerHeight);
+        cameraRef.current.aspect = innerWidth / innerHeight;
+        cameraRef.current.updateProjectionMatrix();
+      }
+    };
+
+    onResize();
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+
+    return () => {
+      cleanup();
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!mountRef.current || rendererRef.current) {
+      return;
+    }
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+    renderer.setClearColor(0x030912);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5, GRAPHICS_PRESETS[settings.quality].pixelRatio));
+    renderer.shadowMap.enabled = GRAPHICS_PRESETS[settings.quality].shadowMap;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const stage = createTestScene({ quality: settings.quality });
+    const { scene, camera } = stage;
+
+    mountRef.current.appendChild(renderer.domElement);
+    rendererRef.current = renderer;
+    sceneRef.current = scene;
+    cameraRef.current = camera;
+
+    const renderFrame = (time) => {
+      const delta = Math.min((time - (lastFrameRef.current || time)) / 1000 || 0.016, 0.05);
+      lastFrameRef.current = time;
+      accumulatorRef.current += delta;
+
+      while (accumulatorRef.current >= FIXED_TIMESTEP) {
+        stage.fixedUpdate?.(FIXED_TIMESTEP);
+        accumulatorRef.current -= FIXED_TIMESTEP;
+      }
+
+      stage.update(delta, settingsRef.current);
+      renderer.render(scene, camera);
+
+      const fpsValue = 1 / Math.max(delta, 0.016);
+      const currentQuality = settingsRef.current.quality;
+      const fpsLow = fpsValue < 25;
+
+      if (settingsRef.current.autoQuality) {
+        lowFpsTimerRef.current = fpsLow ? lowFpsTimerRef.current + delta * 1000 : Math.max(0, lowFpsTimerRef.current - delta * 1000);
+        if (lowFpsTimerRef.current >= 5000) {
+          setSettings((prev) => {
+            const nextQuality = getLowerQuality(prev.quality);
+            if (!nextQuality || nextQuality === prev.quality) {
+              return prev;
+            }
+            lowFpsTimerRef.current = 0;
+            return { ...prev, quality: nextQuality };
+          });
+        }
+      }
+
+      if (time - (renderFrame.lastHudUpdate || 0) > 250) {
+        setFps(Math.round(fpsValue));
+        renderFrame.lastHudUpdate = time;
+      }
+
+      animationRef.current = requestAnimationFrame(renderFrame);
+    };
+
+    renderFrame.lastHudUpdate = 0;
+    animationRef.current = requestAnimationFrame(renderFrame);
+
+    return () => {
+      cancelAnimationFrame(animationRef.current);
+      if (mountRef.current && renderer.domElement) {
+        mountRef.current.removeChild(renderer.domElement);
+      }
+      renderer.dispose();
+      scene.traverse((obj) => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+          if (Array.isArray(obj.material)) {
+            obj.material.forEach((material) => material.dispose());
+          } else {
+            obj.material.dispose();
+          }
+        }
+      });
+      rendererRef.current = null;
+      sceneRef.current = null;
+      cameraRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!rendererRef.current) {
+      return;
+    }
+    const preset = GRAPHICS_PRESETS[settings.quality];
+    rendererRef.current.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5, preset.pixelRatio));
+    rendererRef.current.shadowMap.enabled = preset.shadowMap;
+    if (sceneRef.current) {
+      sceneRef.current.userData.quality = settings.quality;
+    }
+  }, [settings.quality]);
+
+  useEffect(() => {
+    if (screen === 'loading') {
+      const timer = setInterval(() => {
+        setLoadingProgress((prev) => {
+          const next = prev + 12;
+          if (next >= 100) {
+            clearInterval(timer);
+            return 100;
+          }
+          return next;
+        });
+      }, 140);
+
+      const nextTip = setInterval(() => {
+        setTip((prev) => TIP_SET[(TIP_SET.indexOf(prev) + 1) % TIP_SET.length]);
+      }, 2200);
+
+      const goToGame = setTimeout(() => {
+        setScreen('game');
+        audioRef.current?.start();
+      }, 2300);
+
+      return () => {
+        clearInterval(timer);
+        clearInterval(nextTip);
+        clearTimeout(goToGame);
+      };
+    }
+  }, [screen]);
+
+  const handleNewGame = () => {
+    setLoadingProgress(0);
+    setTip(TIP_SET[0]);
+    setScreen('loading');
+    audioRef.current?.start();
+  };
+
+  const handleContinue = () => {
+    setScreen('game');
+    audioRef.current?.start();
+  };
+
+  const handleOpenSettings = () => setScreen('settings');
+  const handleOpenCredits = () => setScreen('credits');
+
+  const handleSetQuality = (value) => {
+    setSettings((prev) => ({ ...prev, quality: value }));
+  };
+
+  const handleToggleFps = () => {
+    setSettings((prev) => ({ ...prev, showFps: !prev.showFps }));
+  };
+
+  const handleToggleAutoQuality = () => {
+    setSettings((prev) => ({ ...prev, autoQuality: !prev.autoQuality }));
+  };
+
+  const handleToggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+      setSettings((prev) => ({ ...prev, fullscreen: !prev.fullscreen }));
+    } catch (error) {
+      console.warn('Fullscreen request failed:', error);
+    }
+  };
+
+  const qualityScreen = useMemo(
+    () => [
+      { value: 'low', label: 'Low', note: 'Battery-safe' },
+      { value: 'medium', label: 'Medium', note: 'Balanced' },
+      { value: 'high', label: 'High', note: 'Smooth play' },
+      { value: 'ultra', label: 'Ultra', note: 'Max detail' },
+    ],
+    []
+  );
+
+  return (
+    <div className="app-shell">
+      <div ref={mountRef} className="game-stage" />
+
+      {portrait && (
+        <div className="orientation-overlay">
+          <div className="orientation-card">
+            <h2>Rotate device</h2>
+            <p>NEON CITY is built for landscape play.</p>
+          </div>
+        </div>
+      )}
+
+      {screen === 'menu' && (
+        <MenuScreen onStart={handleNewGame} onContinue={handleContinue} onSettings={handleOpenSettings} onCredits={handleOpenCredits} />
+      )}
+
+      {screen === 'loading' && <LoadingScreen progress={loadingProgress} tip={tip} />}
+
+      {screen === 'settings' && (
+        <SettingsScreen
+          currentQuality={settings.quality}
+          showFps={settings.showFps}
+          autoQuality={settings.autoQuality}
+          onBack={() => setScreen('menu')}
+          onQualityChange={handleSetQuality}
+          onToggleFps={handleToggleFps}
+          onToggleAutoQuality={handleToggleAutoQuality}
+          onToggleFullscreen={handleToggleFullscreen}
+          options={qualityScreen}
+        />
+      )}
+
+      {screen === 'credits' && (
+        <div className="panel credits-panel">
+          <div className="panel-header">
+            <h2>Credits</h2>
+            <button className="panel-close" onClick={() => setScreen('menu')}>Back</button>
+          </div>
+          <div className="credits-list">
+            <p>Design: NEON CITY Studio</p>
+            <p>Code: Procedural Three.js systems</p>
+            <p>Audio: Synth pulse engine</p>
+            <p>Art: Original code-generated neon forms</p>
+          </div>
+        </div>
+      )}
+
+      {screen === 'game' && (
+        <HUD
+          fps={fps}
+          showFps={settings.showFps}
+          quality={GRAPHICS_PRESETS[settings.quality].label}
+          autoQuality={settings.autoQuality}
+          onPause={() => setScreen('menu')}
+          onOpenSettings={handleOpenSettings}
+        />
+      )}
+    </div>
+  );
+}
+
+export default App;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

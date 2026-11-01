@@ -1,0 +1,152 @@
+export function SettingsScreen({
+  currentQuality,
+  showFps,
+  autoQuality,
+  onBack,
+  onQualityChange,
+  onToggleFps,
+  onToggleAutoQuality,
+  onToggleFullscreen,
+  options,
+}) {
+  return (
+    <div className="ui-panel">
+      <div className="settings-card">
+        <div className="panel-header">
+          <h2>Settings</h2>
+          <button className="panel-close" onClick={onBack}>Back</button>
+        </div>
+
+        <div className="quality-options">
+          {options.map((option) => (
+            <div key={option.value} className="quality-option">
+              <div className="quality-meta">
+                <strong>{option.label}</strong>
+                <span>{option.note}</span>
+              </div>
+
+              <button
+                className={`segment ${currentQuality === option.value ? 'active' : ''}`}
+                onClick={() => onQualityChange(option.value)}
+              >
+                {currentQuality === option.value ? 'Active' : 'Set'}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="toggle-row">
+          <span>FPS Counter</span>
+          <button className="icon-button" onClick={onToggleFps}>{showFps ? 'On' : 'Off'}</button>
+        </div>
+
+        <div className="toggle-row">
+          <span>Auto Quality</span>
+          <button className="icon-button" onClick={onToggleAutoQuality}>{autoQuality ? 'On' : 'Off'}</button>
+        </div>
+
+        <div className="toggle-row">
+          <span>Fullscreen</span>
+          <button className="icon-button" onClick={onToggleFullscreen}>Toggle</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
